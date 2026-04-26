@@ -51,3 +51,21 @@ func TestMemoryCache_RaceCondition(t *testing.T) {
 
 	wg.Wait()
 }
+
+func BenchmarkTest(b *testing.B) {
+	c := New()
+	for i := 0; i < b.N; i++ {
+		c.Set("key", i)
+	}
+}
+
+func BenchmarkSetParallel(b *testing.B) {
+	c := New()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			c.Set(fmt.Sprintf("key-%d", i), i)
+			i++
+		}
+	})
+}
