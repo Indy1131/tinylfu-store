@@ -1,13 +1,16 @@
 package cache
 
 import (
+	"container/list"
 	"hash/fnv"
 	"sync"
 )
 
+const totalMaxEntries = 100000
 const numShards = 32
 
 type Entry struct {
+	Key   string
 	Value any
 }
 
@@ -18,8 +21,10 @@ type Cache interface {
 }
 
 type shard struct {
-	mu   sync.RWMutex
-	data map[string]*Entry
+	mu         sync.RWMutex
+	data       map[string]*list.Element
+	ll         *list.List
+	maxEntries int
 }
 
 type MemoryCache struct {
@@ -27,12 +32,16 @@ type MemoryCache struct {
 }
 
 func New() *MemoryCache {
+	shardLimit := totalMaxEntries / numShards
+
 	c := &MemoryCache{
 		shards: make([]*shard, numShards),
 	}
 	for i := 0; i < numShards; i++ {
 		c.shards[i] = &shard{
-			data: make(map[string]*Entry),
+			data:       make(map[string]*list.Element),
+			ll:         list.New(),
+			maxEntries: shardLimit,
 		}
 	}
 	return c
@@ -48,14 +57,15 @@ func (c *MemoryCache) Get(key string) (any, bool) {
 	shardIndex := c.getShardIndex(key)
 	s := c.shards[shardIndex]
 
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	entry, ok := s.data[key]
-	if !ok {
-		return nil, false
+	if ele, ok := s.data[key]; ok {
+		s.ll.MoveToFront(ele)
+		entry := ele.Value.(*Entry)
+		return entry.Value, true
 	}
-	return entry.Value, true
+	return nil, false
 }
 
 func (c *MemoryCache) Set(key string, value any) {
@@ -64,7 +74,29 @@ func (c *MemoryCache) Set(key string, value any) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.data[key] = &Entry{Value: value}
+
+	if ele, ok := s.data[key]; ok {
+		s.ll.MoveToFront(ele)
+		ele.Value.(*Entry).Value = value
+		return
+	}
+
+	newEntry := &Entry{Key: key, Value: value}
+	ele := s.ll.PushFront(newEntry)
+	s.data[key] = ele
+
+	if s.maxEntries > 0 && s.ll.Len() > s.maxEntries {
+		s.removeOldest()
+	}
+}
+
+func (s *shard) removeOldest() {
+	ele := s.ll.Back()
+	if ele != nil {
+		s.ll.Remove(ele)
+		entry := ele.Value.(*Entry)
+		delete(s.data, entry.Key)
+	}
 }
 
 func (c *MemoryCache) Delete(key string) {
@@ -73,5 +105,9 @@ func (c *MemoryCache) Delete(key string) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.data, key)
+
+	if ele, ok := s.data[key]; ok {
+		s.ll.Remove(ele)
+		delete(s.data, key)
+	}
 }
