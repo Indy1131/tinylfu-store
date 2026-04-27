@@ -28,7 +28,9 @@ type shard struct {
 }
 
 type MemoryCache struct {
-	shards []*shard
+	shards   []*shard
+	sketch   *FrequencySketch
+	sketchMu sync.Mutex
 }
 
 func New() *MemoryCache {
@@ -36,6 +38,7 @@ func New() *MemoryCache {
 
 	c := &MemoryCache{
 		shards: make([]*shard, numShards),
+		sketch: NewSketch(totalMaxEntries),
 	}
 	for i := 0; i < numShards; i++ {
 		c.shards[i] = &shard{
@@ -62,6 +65,11 @@ func (c *MemoryCache) Get(key string) (any, bool) {
 
 	if ele, ok := s.data[key]; ok {
 		s.ll.MoveToFront(ele)
+
+		c.sketchMu.Lock()
+		c.sketch.Increment(key)
+		c.sketchMu.Unlock()
+
 		entry := ele.Value.(*Entry)
 		return entry.Value, true
 	}
@@ -81,13 +89,29 @@ func (c *MemoryCache) Set(key string, value any) {
 		return
 	}
 
+	c.sketchMu.Lock()
+	c.sketch.Increment(key)
+	c.sketchMu.Unlock()
+
+	if s.maxEntries > 0 && s.ll.Len() > s.maxEntries {
+		victimEle := s.ll.Back()
+		victim := victimEle.Value.(*Entry)
+
+		c.sketchMu.Lock()
+		victimFreq := c.sketch.Estimate(victim.Key)
+		newFreq := c.sketch.Estimate(key)
+		c.sketchMu.Unlock()
+
+		if newFreq < victimFreq {
+			return
+		}
+
+		s.removeOldest()
+	}
+
 	newEntry := &Entry{Key: key, Value: value}
 	ele := s.ll.PushFront(newEntry)
 	s.data[key] = ele
-
-	if s.maxEntries > 0 && s.ll.Len() > s.maxEntries {
-		s.removeOldest()
-	}
 }
 
 func (s *shard) removeOldest() {
