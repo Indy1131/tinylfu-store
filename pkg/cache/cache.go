@@ -93,7 +93,7 @@ func (c *MemoryCache) Set(key string, value any) {
 	c.sketch.Increment(key)
 	c.sketchMu.Unlock()
 
-	if s.maxEntries > 0 && s.ll.Len() > s.maxEntries {
+	if s.maxEntries > 0 && s.ll.Len() >= s.maxEntries {
 		victimEle := s.ll.Back()
 		victim := victimEle.Value.(*Entry)
 

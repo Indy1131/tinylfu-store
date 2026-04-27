@@ -87,6 +87,53 @@ func TestLRU_Promotion(t *testing.T) {
 	}
 }
 
+func TestHitRatio_DeadHotKey(t *testing.T) {
+	shardLimit := 2
+	c := New()
+
+	for _, s := range c.shards {
+		s.maxEntries = shardLimit
+	}
+
+	var key1, key2, filler string
+	for i := 0; i < 1000; i++ {
+		k := fmt.Sprintf("k%d", i)
+		if c.getShardIndex(k) == 0 {
+			if key1 == "" {
+				key1 = k
+			} else if key2 == "" {
+				key2 = k
+			} else {
+				filler = k
+			}
+		}
+	}
+
+	for i := 0; i < 500; i++ {
+		c.Set(key1, "old")
+		c.Get(key1)
+	}
+
+	for i := 0; i < 50; i++ {
+		c.sketchMu.Lock()
+		c.sketch.Increment(key2)
+		c.sketchMu.Unlock()
+	}
+
+	c.Set(key1, "val1")
+	c.Set(filler, "val2")
+
+	c.Set(key2, "new-hot")
+
+	_, ok := c.Get(key2)
+
+	if !ok {
+		t.Errorf("FAIL: new hoy key not admitted")
+	} else {
+		fmt.Println("PASS: new hot key admitted")
+	}
+}
+
 func BenchmarkTest(b *testing.B) {
 	c := New()
 	for i := 0; i < b.N; i++ {
