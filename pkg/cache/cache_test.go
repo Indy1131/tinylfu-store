@@ -139,7 +139,7 @@ func TestHitRatio_Battle(t *testing.T) {
 
 	hits := 0
 	for i := 0; i < hotKeyCount; i++ {
-		if _, ok := c.Get(fmt.Sprintf("hit-%d", i)); ok {
+		if _, ok := c.Get(fmt.Sprintf("hot-%d", i)); ok {
 			hits++
 		}
 	}
