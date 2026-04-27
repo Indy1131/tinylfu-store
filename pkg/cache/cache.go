@@ -1,45 +1,77 @@
 package cache
 
-import "sync"
+import (
+	"hash/fnv"
+	"sync"
+)
+
+const numShards = 32
 
 type Entry struct {
-	Value interface{}
+	Value any
 }
 
 type Cache interface {
-	Get(key string) (interface{}, bool)
-	Set(key string, value interface{})
+	Get(key string) (any, bool)
+	Set(key string, value any)
 	Delete(key string)
 }
 
-type MemoryCache struct {
+type shard struct {
 	mu   sync.RWMutex
 	data map[string]*Entry
 }
 
-func New() *MemoryCache {
-	return &MemoryCache{data: make(map[string]*Entry)}
+type MemoryCache struct {
+	shards []*shard
 }
 
-func (c *MemoryCache) Get(key string) (interface{}, bool) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+func New() *MemoryCache {
+	c := &MemoryCache{
+		shards: make([]*shard, numShards),
+	}
+	for i := 0; i < numShards; i++ {
+		c.shards[i] = &shard{
+			data: make(map[string]*Entry),
+		}
+	}
+	return c
+}
 
-	entry, ok := c.data[key]
+func (c *MemoryCache) getShardIndex(key string) uint32 {
+	hash := fnv.New32a()
+	hash.Write([]byte(key))
+	return hash.Sum32() % uint32(numShards)
+}
+
+func (c *MemoryCache) Get(key string) (any, bool) {
+	shardIndex := c.getShardIndex(key)
+	s := c.shards[shardIndex]
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	entry, ok := s.data[key]
 	if !ok {
 		return nil, false
 	}
 	return entry.Value, true
 }
 
-func (c *MemoryCache) Set(key string, value interface{}) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.data[key] = &Entry{Value: value}
+func (c *MemoryCache) Set(key string, value any) {
+	shardIndex := c.getShardIndex(key)
+	s := c.shards[shardIndex]
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.data[key] = &Entry{Value: value}
 }
 
 func (c *MemoryCache) Delete(key string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	delete(c.data, key)
+	shardIndex := c.getShardIndex(key)
+	s := c.shards[shardIndex]
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.data, key)
 }
