@@ -88,49 +88,57 @@ func TestLRU_Promotion(t *testing.T) {
 }
 
 func TestHitRatio_DeadHotKey(t *testing.T) {
-	shardLimit := 2
 	c := New()
+	c.sketch.sampleSize = 100
 
+	shardLimit := 2
 	for _, s := range c.shards {
 		s.maxEntries = shardLimit
 	}
 
-	var key1, key2, filler string
-	for i := 0; i < 1000; i++ {
-		k := fmt.Sprintf("k%d", i)
+	var deadHot, newHot, filler string
+	for i := 0; ; i++ {
+		k := fmt.Sprintf("key-%d", i)
 		if c.getShardIndex(k) == 0 {
-			if key1 == "" {
-				key1 = k
-			} else if key2 == "" {
-				key2 = k
+			if deadHot == "" {
+				deadHot = k
+			} else if newHot == "" {
+				newHot = k
 			} else {
 				filler = k
+				break
 			}
 		}
 	}
 
-	for i := 0; i < 500; i++ {
-		c.Set(key1, "old")
-		c.Get(key1)
+	for i := 0; i < 255; i++ {
+		c.sketch.Increment(deadHot)
+		c.sketch.Increment(newHot)
 	}
 
-	for i := 0; i < 50; i++ {
-		c.sketchMu.Lock()
-		c.sketch.Increment(key2)
-		c.sketchMu.Unlock()
+	c.Set(deadHot, "dead-hot")
+	c.Set(filler, "filler-val")
+
+	c.Set(newHot, "new-hot")
+
+	for i := 0; i < 300; i++ {
+		c.sketch.Increment("noise")
 	}
 
-	c.Set(key1, "val1")
-	c.Set(filler, "val2")
+	for i := 0; i < 40; i++ {
+		c.sketch.Increment(newHot)
+	}
 
-	c.Set(key2, "new-hot")
+	c.Set(newHot, "admitted")
 
-	_, ok := c.Get(key2)
+	if _, ok := c.Get(deadHot); ok {
+		t.Error("FAIL: Old hotkey was not evicted")
+	}
 
-	if !ok {
-		t.Errorf("FAIL: new hoy key not admitted")
+	if _, ok := c.Get(newHot); !ok {
+		t.Error("FAIL: New hotkey was not admitted")
 	} else {
-		fmt.Println("PASS: new hot key admitted")
+		fmt.Println("PASS: New hotkey was admitted and old hotkey was evicted")
 	}
 }
 

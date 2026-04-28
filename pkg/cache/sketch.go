@@ -3,8 +3,10 @@ package cache
 import "hash/fnv"
 
 type FrequencySketch struct {
-	counters []uint8
-	mask     uint32
+	counters   []uint8
+	mask       uint32
+	totalCount int
+	sampleSize int
 }
 
 func NewSketch(size int) *FrequencySketch {
@@ -13,8 +15,9 @@ func NewSketch(size int) *FrequencySketch {
 		sampleSize <<= 1
 	}
 	return &FrequencySketch{
-		counters: make([]uint8, sampleSize),
-		mask:     uint32(sampleSize - 1),
+		counters:   make([]uint8, sampleSize),
+		mask:       uint32(sampleSize - 1),
+		sampleSize: size,
 	}
 }
 
@@ -35,6 +38,11 @@ func (s *FrequencySketch) Increment(key string) {
 			s.counters[idx]++
 		}
 	}
+
+	s.totalCount++
+	if s.totalCount >= s.sampleSize {
+		s.reset()
+	}
 }
 
 func (s *FrequencySketch) Estimate(key string) uint8 {
@@ -50,4 +58,11 @@ func (s *FrequencySketch) Estimate(key string) uint8 {
 		}
 	}
 	return min
+}
+
+func (s *FrequencySketch) reset() {
+	for i := range s.counters {
+		s.counters[i] >>= 1
+	}
+	s.totalCount = 0
 }
