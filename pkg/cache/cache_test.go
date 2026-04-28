@@ -269,12 +269,11 @@ func BenchmarkMixedWorkLoad(b *testing.B) {
 func BenchmarkSketchContention(b *testing.B) {
 	c := New()
 
+	hotKey := "popular"
+
 	b.RunParallel(func(pb *testing.PB) {
-		i := 0
 		for pb.Next() {
-			key := fmt.Sprintf("key-%d", i%100)
-			c.Get(key)
-			i++
+			c.Get(hotKey)
 		}
 	})
 }
