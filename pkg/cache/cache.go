@@ -30,15 +30,18 @@ type shard struct {
 type MemoryCache struct {
 	shards   []*shard
 	sketch   *FrequencySketch
-	sketchMu sync.Mutex
+	buffer   chan string
+	stopChan chan struct{}
 }
 
 func New() *MemoryCache {
 	shardLimit := totalMaxEntries / numShards
 
 	c := &MemoryCache{
-		shards: make([]*shard, numShards),
-		sketch: NewSketch(totalMaxEntries),
+		shards:   make([]*shard, numShards),
+		sketch:   NewSketch(totalMaxEntries),
+		buffer:   make(chan string, 1024),
+		stopChan: make(chan struct{}),
 	}
 	for i := 0; i < numShards; i++ {
 		c.shards[i] = &shard{
@@ -47,6 +50,9 @@ func New() *MemoryCache {
 			maxEntries: shardLimit,
 		}
 	}
+
+	go c.processBuffer()
+
 	return c
 }
 
@@ -66,13 +72,15 @@ func (c *MemoryCache) Get(key string) (any, bool) {
 	if ele, ok := s.data[key]; ok {
 		s.ll.MoveToFront(ele)
 
-		c.sketchMu.Lock()
-		c.sketch.Increment(key)
-		c.sketchMu.Unlock()
+		select {
+		case c.buffer <- key:
+		default:
+		}
 
 		entry := ele.Value.(*Entry)
 		return entry.Value, true
 	}
+
 	return nil, false
 }
 
@@ -89,18 +97,12 @@ func (c *MemoryCache) Set(key string, value any) {
 		return
 	}
 
-	c.sketchMu.Lock()
-	c.sketch.Increment(key)
-	c.sketchMu.Unlock()
-
 	if s.maxEntries > 0 && s.ll.Len() >= s.maxEntries {
 		victimEle := s.ll.Back()
 		victim := victimEle.Value.(*Entry)
 
-		c.sketchMu.Lock()
 		victimFreq := c.sketch.Estimate(victim.Key)
 		newFreq := c.sketch.Estimate(key)
-		c.sketchMu.Unlock()
 
 		if newFreq < victimFreq {
 			return
@@ -133,5 +135,16 @@ func (c *MemoryCache) Delete(key string) {
 	if ele, ok := s.data[key]; ok {
 		s.ll.Remove(ele)
 		delete(s.data, key)
+	}
+}
+
+func (c *MemoryCache) processBuffer() {
+	for {
+		select {
+		case key := <-c.buffer:
+			c.sketch.Increment(key)
+		case <-c.stopChan:
+			return
+		}
 	}
 }
