@@ -63,6 +63,11 @@ func (c *MemoryCache) getShardIndex(key string) uint32 {
 }
 
 func (c *MemoryCache) Get(key string) (any, bool) {
+	select {
+	case c.buffer <- key:
+	default:
+	}
+
 	shardIndex := c.getShardIndex(key)
 	s := c.shards[shardIndex]
 
@@ -71,11 +76,6 @@ func (c *MemoryCache) Get(key string) (any, bool) {
 
 	if ele, ok := s.data[key]; ok {
 		s.ll.MoveToFront(ele)
-
-		select {
-		case c.buffer <- key:
-		default:
-		}
 
 		entry := ele.Value.(*Entry)
 		return entry.Value, true

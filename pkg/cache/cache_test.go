@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestMemoryCache_Concurrency(t *testing.T) {
@@ -140,6 +141,36 @@ func TestHitRatio_DeadHotKey(t *testing.T) {
 	} else {
 		fmt.Println("PASS: New hotkey was admitted and old hotkey was evicted")
 	}
+}
+
+func TestMaintenanceBuffer_AsynUpdate(t *testing.T) {
+	c := New()
+	key := "test-key"
+
+	if freq := c.sketch.Estimate(key); freq != 0 {
+		t.Errorf("Expected initial frequency of 0, got %d", freq)
+	}
+
+	for i := 0; i < 10; i++ {
+		c.Get(key)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	if freq := c.sketch.Estimate(key); freq < 10 {
+		t.Errorf("Expected frequency to be at least 10, got %d", freq)
+	}
+}
+
+func TestMaintenanceBuffer_LossyFlood(t *testing.T) {
+	c := New()
+
+	floodSize := 10000
+	for i := 0; i < floodSize; i++ {
+		c.Get("overload")
+	}
+
+	fmt.Println("Handled flood without blocking")
 }
 
 func BenchmarkTest(b *testing.B) {
