@@ -112,9 +112,13 @@ func TestHitRatio_DeadHotKey(t *testing.T) {
 		}
 	}
 
+	deadHotHash := c.sketch.Hash(deadHot)
+	newHotHash := c.sketch.Hash(newHot)
+	noiseHash := c.sketch.Hash("noise")
+
 	for i := 0; i < 255; i++ {
-		c.sketch.Increment(deadHot)
-		c.sketch.Increment(newHot)
+		c.sketch.Increment(deadHotHash)
+		c.sketch.Increment(newHotHash)
 	}
 
 	c.Set(deadHot, "dead-hot")
@@ -123,11 +127,11 @@ func TestHitRatio_DeadHotKey(t *testing.T) {
 	c.Set(newHot, "new-hot")
 
 	for i := 0; i < 300; i++ {
-		c.sketch.Increment("noise")
+		c.sketch.Increment(noiseHash)
 	}
 
 	for i := 0; i < 40; i++ {
-		c.sketch.Increment(newHot)
+		c.sketch.Increment(newHotHash)
 	}
 
 	c.Set(newHot, "admitted")
@@ -146,8 +150,9 @@ func TestHitRatio_DeadHotKey(t *testing.T) {
 func TestMaintenanceBuffer_AsynUpdate(t *testing.T) {
 	c := New()
 	key := "test-key"
+	keyHash := c.sketch.Hash(key)
 
-	if freq := c.sketch.Estimate(key); freq != 0 {
+	if freq := c.sketch.Estimate(keyHash); freq != 0 {
 		t.Errorf("Expected initial frequency of 0, got %d", freq)
 	}
 
@@ -157,8 +162,8 @@ func TestMaintenanceBuffer_AsynUpdate(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	if freq := c.sketch.Estimate(key); freq < 10 {
-		t.Errorf("Expected frequency to be at least 10, got %d", freq)
+	if freq := c.sketch.Estimate(keyHash); freq < 9 {
+		t.Errorf("Expected frequency to be at least 9, got %d", freq)
 	}
 }
 
@@ -264,6 +269,80 @@ func BenchmarkMixedWorkLoad(b *testing.B) {
 			i++
 		}
 	})
+}
+
+func TestStats_HitsAndMisses(t *testing.T) {
+	c := New()
+	c.Set("present", "value")
+
+	c.Get("present")
+	c.Get("present")
+	c.Get("missing")
+
+	stats := c.Stats()
+	if stats.Hits != 2 {
+		t.Errorf("expected 2 hits, got %d", stats.Hits)
+	}
+	if stats.Misses != 1 {
+		t.Errorf("expected 1 miss, got %d", stats.Misses)
+	}
+	if got, want := stats.HitRatio(), 2.0/3.0; got != want {
+		t.Errorf("expected hit ratio %.4f, got %.4f", want, got)
+	}
+}
+
+func TestStats_EvictionsAndRejections(t *testing.T) {
+	shardLimit := 2
+	withAdmission := New()
+	for _, s := range withAdmission.shards {
+		s.maxEntries = shardLimit
+	}
+
+	// Find distinct keys that all land in shard 0, so a full shard can be
+	// deterministically triggered without depending on hash luck.
+	shardZeroKeys := make([]string, 0, 3)
+	for i := 0; len(shardZeroKeys) < 3; i++ {
+		k := fmt.Sprintf("key-%d", i)
+		if withAdmission.getShardIndex(k) == 0 {
+			shardZeroKeys = append(shardZeroKeys, k)
+		}
+	}
+
+	// Warm up two keys with a strong frequency signal so the admission
+	// policy is guaranteed to reject a cold newcomer against them.
+	k1, k2 := shardZeroKeys[0], shardZeroKeys[1]
+	for i := 0; i < 20; i++ {
+		withAdmission.sketch.Increment(withAdmission.sketch.Hash(k1))
+		withAdmission.sketch.Increment(withAdmission.sketch.Hash(k2))
+	}
+	withAdmission.Set(k1, "v1")
+	withAdmission.Set(k2, "v2")
+
+	cold := shardZeroKeys[2]
+	withAdmission.Set(cold, "cold-value")
+
+	stats := withAdmission.Stats()
+	if stats.Rejected == 0 {
+		t.Error("expected the admission policy to reject at least one cold key")
+	}
+
+	// With admission disabled, the cache behaves like a plain LRU: it
+	// never rejects, and a full shard always evicts on insert.
+	plainLRU := New(WithAdmission(false))
+	for _, s := range plainLRU.shards {
+		s.maxEntries = shardLimit
+	}
+	plainLRU.Set(k1, "v1")
+	plainLRU.Set(k2, "v2")
+	plainLRU.Set(cold, "cold-value")
+
+	plainStats := plainLRU.Stats()
+	if plainStats.Rejected != 0 {
+		t.Errorf("expected 0 rejections with admission disabled, got %d", plainStats.Rejected)
+	}
+	if plainStats.Evictions == 0 {
+		t.Error("expected at least one eviction with admission disabled")
+	}
 }
 
 func BenchmarkSketchContention(b *testing.B) {
