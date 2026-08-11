@@ -1,0 +1,5 @@
+keyspace_ratio,keyspace_size,lru_only_hit_ratio,tinylfu_hit_ratio,improvement_pp
+2,200000,0.8684,0.8684,0.00
+5,500000,0.8321,0.8321,0.00
+10,1000000,0.8072,0.8072,0.00
+20,2000000,0.7846,0.7846,-0.00
