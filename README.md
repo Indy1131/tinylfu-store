@@ -193,6 +193,7 @@ picture changes.
 ```bash
 go vet ./...
 go test ./... -race
+gofmt -l .   # should print nothing; CI fails otherwise
 ```
 
 ## Known limitations
